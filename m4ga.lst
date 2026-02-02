@@ -1,0 +1,273 @@
+                00001 ;FREHD BOOT W/OUT MODIFIED C ROM
+                00002 ;TJBCHRIS WROTE THIS - 11/16/2020 - UPDATED 11/2022
+                00003 ;kdcgarber Modified to include Retrostore and IP address 01/26
+                00004 ;BASED ON BASIC PROGRAM ON GITHUB: APUDER/TRS-IO ISSUE #23
+                00005 
+                00006 ;TRS-IO command values from retrostore.h
+                00007 ;#define TRS_IO_PORT 31
+                00008 ;#define TRS_IO_CORE_MODULE_ID 0
+                00009 ;#define TRS_IO_SEND_VERSION 0
+                00010 ;#define TRS_IO_SEND_STATUS 1
+                00011 ;#define TRS_IO_CMD_CONFIGURE_WIFI 2
+                00012 ;#define TRS_IO_SEND_WIFI_SSID 3
+                00013 ;#define TRS_IO_SEND_WIFI_IP 4
+                00014 
+    = 001F      00015 TRS_IO_PORT                     EQU     1FH     ;31
+    = 0000      00016 TRS_IO_CORE_MODULE_ID           EQU     00H
+    = 0000      00017 TRS_IO_SEND_VERSION             EQU     00H
+    = 0001      00018 TRS_IO_SEND_STATUS              EQU     01H
+    = 0002      00019 TRS_IO_CMD_CONFIGURE_WIFI       EQU     02H
+    = 0003      00020 TRS_IO_SEND_SSID                EQU     03H     ;Had to remove _WIFI because the variable was to long to for it to be unique
+    = 0004      00021 TRS_IO_SEND_IP                  EQU     04H
+                00022 
+                00023 
+                00024 
+                00025 ;MODEL 4-SPECIFIC EQUATE
+    = 0004      00026 MODEL   EQU     4       ;COMPUTER MODEL
+                00027 
+                00028 ;STANDARD EQUATES
+    = 00C4      00029 FREHD   EQU     196     ;REHD PORT
+    = 5000      00030 MEMLOC  EQU     5000H   ;WHERE TO STORE CODE FROM FREHD
+    = 00FF      00031 NBYTES  EQU     255     ;NUM OF BYTES TO READ FROM FREHD
+    = 5100      00032 RSLOC   EQu     5100H   ;LOCATION OF THE RETROSTORE IN MEMORY
+                00033 
+                00034         ;ORG ADDRESS AND BOOT TRACK FOR MODEL III/4/4P
+                00035         ;USING LDOS 5.3.1 DATA DISK AS THE BASE (DIR TRACK 20)
+                00036         ORG     4300H     ;4300H for M3/M4/M4P  xxxxH for M1
+                00037 
+                00038 
+                00039 START:
+4300  00        00040         NOP
+                00041 
+                00042 CLS:
+4301  CDC901    00043         CALL    01C9H           ;Calls the CLS routine at address 01C9h
+                00044 
+                00045 
+                00046 
+                00047 ; -- Menu ---------------------------------------------------------------------
+4304  CD2543    00048         CALL    HEADER
+                00049         
+                00050 GET_KEY:
+                00051         ; Wait for keypress and return character in A
+4307  CD4900    00052         CALL    0049H           ; KBWAIT: ROM routine that waits for key (Model 4)
+                00053                                 ; Saves 4 bytes vs manually looping CALL 002BH
+                00054         
+430A  FE1B      00055         CP      1BH             ; Break key to exit
+430C  C8        00056         RET     Z               ; 2 bytes
+                00057         
+                00058         ; Using relative subtraction for menu selection
+430D  D631      00059         SUB     '1'             ; A is now 0 for '1', 1 for '2', 2 for '3'
+430F  38F6      00060         JR      C, GET_KEY      ; If key < '1', ignore and loop
+                00061         
+4311  2829      00062         JR      Z, DO_FREHD     ; If A was 0 (key '1')
+4313  3D        00063         DEC     A               ; A becomes 0 if it was 1 (key '2')
+4314  284E      00064         JR      Z, DO_RETRO     
+4316  3D        00065         DEC     A               ; A becomes 0 if it was 2 (key '3')
+4317  286A      00066         JR      Z, DO_SHOW_IP
+                00067         
+4319  18EC      00068         JR      GET_KEY         ; Else loop back
+                00069 
+                00070 
+                00071 
+                00072 ; Prints characters until it hits a 03H byte
+                00073 PRINT_STR:
+431B  7E        00074         LD      A, (HL)
+431C  FE03      00075         CP      03H             ; Is it the end marker?
+431E  C8        00076         RET     Z               ; If yes, return
+431F  CD3300    00077         CALL    0033H           ; Print char in A to screen
+4322  23        00078         INC     HL              ; Move to next char
+4323  18F6      00079         JR      PRINT_STR
+                00080 
+                00081 
+                00082 
+                00083 HEADER:
+                00084 
+                00085         ; TRSNIC HEADER LARGE LETTERS
+4325  21C443    00086         LD      HL, TRSMSG
+4328  CD1B43    00087         CALL    PRINT_STR
+                00088 
+                00089         ; DRAW LINE
+432B  0640      00090         LD      B,64
+                00091 COUNTLP:
+432D  21F643    00092         LD      HL, LINE
+4330  CD1B43    00093         CALL    PRINT_STR
+4333  10F8      00094         DJNZ    COUNTLP         ; B counts down from 64 to 0
+                00095         
+                00096         ; Print the Menu String
+4335  21AA43    00097         LD      HL, MENU_TXT    
+4338  CD1B43    00098         CALL    PRINT_STR       
+                00099 
+433B  C9        00100         RET
+                00101 
+                00102 
+                00103 
+                00104 
+                00105 ;----  FREHD --------------------------------------------------------------
+                00106 DO_FREHD:
+433C  CDC901    00107         CALL    01C9H           ;Calls the CLS routine at address 01C9h
+433F  21A043    00108         LD      HL, WAITNG   
+4342  CD1B43    00109         CALL    PRINT_STR       ; Use our custom printer below
+                00110 
+                00111 
+                00112 ;THE FIRST THREE SECTORS OF A BOOT DISK
+                00113 ;INDICATE THE LOCATION OF THE DIRECTORY.
+                00114 ;FOR MY DISKS...LDOS 5 (MODEL III/4): TRACK 20  = 14 Hex
+                00115 ;               TRSDOS 2.1 (MODEL I): TRACK 17  = 11 Hex
+4345  FE14      00116         CP      14H
+                00117 
+                00118         
+                00119 ; DO THE MAIN TRSNIC LOAD       
+                00120 WAITFRD:
+                00121         ; 10 poke 16912,56
+4347  3E38      00122         LD      A,56
+4349  321042    00123         LD      (16912),A       ;IM NOT SURE WHAT THIS DOES, BUT IF ITS NOT THERE THEM MENU ITEMS DONT COME UP
+                00124 
+                00125 ;READ FROM FREHD PORT AND TELL IT WHICH MODEL IT IS
+                00126         ;also on 10 : OUT 236,56
+434C  D3EC      00127         OUT     (236),A
+                00128         ;20 OUT 197,4  :REM 1=M1, 3=M3, 4=M3/M4A/ 5=M4P
+434E  3E04      00129         LD      A,MODEL
+4350  D3C5      00130         OUT     (197),A         ;SET MODEL (1, 3, 4, 5 FOR 4P)
+                00131 
+                00132 ;CHECK FOR EXPECTED BYTE
+                00133         ; 30 IF inp(196) <> 254 STOP
+4352  DBC4      00134         IN      A,(FREHD)       ;READ BYTE FROM FREHD PORT
+4354  FEFE      00135         CP      254
+4356  20EF      00136         JR      NZ,WAITFRD      ;LOOP TO START OVER IF NO FREHD THEN WAIT FOR FREHD
+                00137         
+                00138 
+                00139 
+                00140 ;WHEN GOOD, READ NBYTES BYTES FROM FREHD AND JUMP TO IT FOR THE FREHD MENU
+                00141         ; 40 FOR I=0 TO 255: POKE 20480+I,INP(196); NEXT
+4358  210050    00142         LD      HL,MEMLOC       ;STARTING ADDR FOR FREHD CODE
+435B  06FF      00143         LD      B,NBYTES
+435D  0EC4      00144         LD      C,FREHD
+435F  EDB2      00145         INIR
+4361  C30050    00146         JP      MEMLOC
+                00147         
+                00148 
+                00149 
+                00150 
+                00151 
+                00152 
+                00153 
+                00154 
+                00155 ; ----- RetroStore ------------------------------------------------------------
+                00156 ; https://github.com/apuder/TRS-IO?tab=readme-ov-file#launching-the-native-retrostore-client
+                00157 
+                00158 DO_RETRO:
+                00159         ; Set Model 4 Mode/Memory (Port 236)
+                00160         ; 10 OUT 236, 16
+4364  3E10      00161         LD      A, 10H
+4366  D3EC      00162         OUT     (0ECH), A
+                00163 
+                00164         ; Reset/Initialize Port 31 logic
+                00165         ; 20 OUT 31, 3
+4368  3E03      00166         LD      A, 03H
+436A  D31F      00167         OUT     (TRS_IO_PORT), A
+                00168         
+                00169         ; 30 OUT 31, 1
+436C  3D        00170         DEC     A               ; A becomes 02H
+436D  CB3F      00171         SRL     A               ; A becomes 01H 
+436F  D31F      00172         OUT     (TRS_IO_PORT), A
+                00173 
+                00174         ; Port 31 "N" value consumption.  the value keeps coming to 65xxx and not the 125 needed.
+                00175         ; 50 FOR X = 1 TO N : POKE 20735 + X, INP(31) : NEXT
+                00176         ; So just slurping up these 2 reads and not doing the calc.
+4371  DB1F      00177         IN      A, (TRS_IO_PORT)
+4373  DB1F      00178         IN      A, (TRS_IO_PORT)
+                00179 
+                00180         ; Setup for Block Transfer
+4375  210051    00181         LD      HL, RSLOC       ; Destination address
+4378  067D      00182         LD      B, 125          ; Loop count (N=125) just forcing it to 125
+437A  0E1F      00183         LD      C, TRS_IO_PORT       ; Port address (31)
+                00184 
+                00185 READ_LOOP:
+437C  EDA2      00186         INI                     ; (HL) <- Port(C), HL++, B--
+437E  20FC      00187         JR      NZ, READ_LOOP   ; Loop until B is 0
+                00188 
+                00189         ; Jump to loaded code
+4380  C30051    00190         JP      RSLOC           
+                00191 
+                00192 
+                00193 
+                00194 
+                00195 
+                00196 
+                00197 
+                00198 
+                00199 ; ----- IP address of the trs-nic ------------------------------------------------------------
+                00200 ; example from https://github.com/apuder/TRS-IO?tab=readme-ov-file#configuring-trs-io
+                00201 DO_SHOW_IP
+                00202 
+4383  CD2543    00203         CALL    HEADER                  ; CLS AND PUT UP HEADER INFO SO THE SCREEN IS CLEAN.
+                00204 
+                00205         ; 10 OUT 236,16
+4386  3E10      00206         LD      A,10H            ; Load 16 (hex 10) into accumulator
+4388  D3EC      00207         OUT     (0ECH),A         
+                00208 
+                00209         ; 20 OUT 31,0 : OUT 31,4
+438A  AF        00210         XOR     A                       ; Clear A (A = 0)
+438B  D31F      00211         OUT     (TRS_IO_PORT),A         ; OUT 31,0
+438D  3E04      00212         LD      A,TRS_IO_SEND_IP        ;TRS_IO_SEND_IP =  04H
+438F  D31F      00213         OUT     (TRS_IO_PORT),A         ; OUT 31,4
+                00214 
+                00215 IP_LOOP:
+                00216         ; 30 C=INP(31) : IF C=0 THEN GOTO 60
+4391  DB1F      00217         IN      A,(TRS_IO_PORT)         ; Read port 31 into A  C=INP(31)
+                00218         
+                00219         ; CHECK FOR END
+4393  B7        00220         OR      A                       ; Is the character 0
+4394  CA0743    00221         JP      Z, GET_KEY              ; If yes, JUMP TO MENU TO START OVER
+                00222 
+4397  FE3A      00223         CP      3AH                     ; MOVE TO NEXT IF VALUE IS A < 39H, which would be anthing to print
+4399  30F6      00224         JR      NC, IP_LOOP             ; NC = A >= 39h
+                00225         
+                00226         ; 40 PRINT CHR$(C)        
+439B  CD3300    00227         CALL    0033H            ; ROM routine to print char in A
+                00228 
+                00229         ; 50 GOTO 30
+439E  18F1      00230         JR      IP_LOOP          ; Repeat the loop
+                00231  
+                00232 
+                00233 
+                00234 
+                00235         
+                00236 ;---- STRING CONSTANTS -------------------------------------------------------
+43A0  57616974  00237 WAITNG  DB      'Waiting..',03H
+      69 6E 67 2E 2E 03      
+                00238 ;TRG3ROM        DB      0CDH,03H,00H    ;Coax 4P into loading MODELA/III
+                00239 MENU_TXT:
+43AA  31204672  00240         DB      "1 FreHD", 0DH
+      65 48 44 0D            
+43B2  32205265  00241         DB      "2 RetoStore", 0DH
+      74 6F 53 74 6F 72 65 0D
+43BE  33204950  00242         DB      "3 IP:", 03h
+      3A 03                  
+                00243 
+43C4  1C        00244 TRSMSG  DB      1CH          ; Clear the screen using the Control Code 1CH
+                00245         ;  T                 R                 S                 N                 I                 C
+43C5  83BF8320  00246         DB 131,191,131," ",  191,131,189," ",  167,147,139," ",  191,148,191," ",  131,191,131," ",  191,131,131,  0DH
+      BF 83 BD 20 A7 93 8B 20
+      BF 94 BF 20 83 BF 83 20
+      BF 83 83 0D            
+43DD  80BF8020  00247         DB 128,191,128," ",  191,131,189," ",  180,178,185," ",  191,138,191," ",  176,191,176," ",  191,176,176,  0DH,03H
+      BF 83 BD 20 B4 B2 B9 20
+      BF 8A BF 20 B0 BF B0 20
+      BF B0 B0 0D 03         
+                00248 
+43F6  8C03      00249 LINE    DB 140,3   ; chacter to make the solid line
+                00250 
+                00251         END     START
+
+
+CLS             4301  COUNTLP         432D  DO_FREHD        433C  
+DO_RETRO        4364  DO_SHOW_IP      4383  FREHD           00C4  
+GET_KEY         4307  HEADER          4325  IP_LOOP         4391  
+LINE            43F6  MEMLOC          5000  MENU_TXT        43AA  
+MODEL           0004  NBYTES          00FF  PRINT_STR       431B  
+READ_LOOP       437C  RSLOC           5100  START           4300  
+TRSMSG          43C4  TRS_IO_CMD_CONF 0002  TRS_IO_CORE_MOD 0000  
+TRS_IO_PORT     001F  TRS_IO_SEND_IP  0004  TRS_IO_SEND_SSI 0003  
+TRS_IO_SEND_STA 0001  TRS_IO_SEND_VER 0000  WAITFRD         4347  
+WAITNG          43A0  
